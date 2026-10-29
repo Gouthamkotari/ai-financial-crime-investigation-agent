@@ -1,147 +1,205 @@
 
+import os
+
 import requests
 import streamlit as st
 
-API_URL = "https://financial-crime-api.onrender.com"
-
 st.set_page_config(
-    page_title="Financial Crime Investigation Agent",
+    page_title="AI Financial Crime Investigation Agent",
     page_icon="🔎",
     layout="wide",
 )
 
+# Connect to the deployed FastAPI backend.
+DEFAULT_API_URL = "https://financial-crime-api.onrender.com"
+
+try:
+    API_BASE_URL = st.secrets.get(
+        "API_BASE_URL", DEFAULT_API_URL
+    )
+except Exception:
+    API_BASE_URL = os.getenv("API_BASE_URL", DEFAULT_API_URL)
+
+API_BASE_URL = API_BASE_URL.rstrip("/")
+
 st.title("🔎 AI Financial Crime Investigation Agent")
-st.caption("Transaction risk scoring and evidence-based investigation")
+st.caption(
+    "Transaction risk scoring and evidence-based investigation"
+)
 
 st.info(
-    "This tool supports analyst review. A model score is not proof of fraud."
+    "Enter transaction details below to generate a model-based "
+    "risk assessment. Results are estimates and require human review."
 )
 
-st.sidebar.header("Investigation")
-transaction_id = st.sidebar.number_input(
-    "PaySim transaction ID",
-    min_value=1,
-    value=100,
-    step=1,
-)
+with st.form("transaction_form"):
+    st.subheader("Transaction details")
 
-if st.sidebar.button("Investigate Transaction", type="primary"):
-    try:
-        response = requests.post(
-            f"{API_URL}/investigate-dataset",
-            json={"transaction_id": int(transaction_id)},
-            timeout=60,
+    col1, col2 = st.columns(2)
+
+    with col1:
+        step = st.number_input(
+            "Transaction step",
+            min_value=1,
+            value=1,
+            step=1,
+            help="The transaction time step in the dataset.",
         )
 
-        if response.status_code == 200:
-            result = response.json()
-            st.session_state["investigation_result"] = result
-        else:
-            st.error(
-                f"API returned {response.status_code}: {response.text}"
-            )
-
-    except requests.RequestException as error:
-        st.error(
-            "Could not connect to the API. Start FastAPI in another "
-            "terminal and try again. Details: " + str(error)
+        transaction_type = st.selectbox(
+            "Transaction type",
+            ["TRANSFER", "CASH_OUT", "PAYMENT", "CASH_IN", "DEBIT"],
         )
 
-result = st.session_state.get("investigation_result")
+        amount = st.number_input(
+            "Transaction amount",
+            min_value=0.01,
+            value=1000.00,
+            step=100.00,
+        )
 
-if result:
-    transaction = result.get("transaction", {})
-    evidence = result.get("evidence", {})
+        origin_account = st.text_input(
+            "Origin account ID (optional)"
+        )
 
-    st.subheader(
-        f"Investigation — Transaction {result['dataset_transaction_id']}"
-    )
+    with col2:
+        destination_account = st.text_input(
+            "Destination account ID (optional)"
+        )
 
-    col1, col2, col3 = st.columns(3)
+        oldbalanceOrg = st.number_input(
+            "Origin balance before transaction",
+            min_value=0.0,
+            value=5000.0,
+            step=100.0,
+        )
 
-    col1.metric("Risk Score", f"{result['risk_score']:.2%}")
-    col2.metric("Risk Level", result["risk_level"])
-    col3.metric("Transaction Type", transaction.get("type", "Unknown"))
+        newbalanceOrig = st.number_input(
+            "Origin balance after transaction",
+            min_value=0.0,
+            value=4000.0,
+            step=100.0,
+        )
 
-    st.subheader("Transaction Details")
+        oldbalanceDest = st.number_input(
+            "Destination balance before transaction",
+            min_value=0.0,
+            value=100.0,
+            step=100.0,
+        )
 
-    st.dataframe(
-        {
-            "Field": [
-                "Step",
-                "Amount",
-                "Origin Account",
-                "Destination Account",
-            ],
-            "Value": [
-                transaction.get("step"),
-                transaction.get("amount"),
-                transaction.get("origin_account"),
-                transaction.get("destination_account"),
-            ],
-        },
-        hide_index=True,
+        newbalanceDest = st.number_input(
+            "Destination balance after transaction",
+            min_value=0.0,
+            value=1100.0,
+            step=100.0,
+        )
+
+    submitted = st.form_submit_button(
+        "Investigate Transaction",
+        type="primary",
         use_container_width=True,
     )
 
-    st.subheader("Investigation Summary")
-    st.write(result.get("investigation_summary", "No summary available."))
+if submitted:
+    payload = {
+        "step": int(step),
+        "type": transaction_type,
+        "amount": float(amount),
+        "origin_account": origin_account.strip() or None,
+        "destination_account": destination_account.strip() or None,
+        "oldbalanceOrg": float(oldbalanceOrg),
+        "newbalanceOrig": float(newbalanceOrig),
+        "oldbalanceDest": float(oldbalanceDest),
+        "newbalanceDest": float(newbalanceDest),
+    }
 
-    st.subheader("Evidence")
-
-    evidence_fields = [
-        "origin_balance_before",
-        "origin_balance_after",
-        "origin_balance_decrease",
-        "destination_balance_before",
-        "destination_balance_after",
-        "destination_balance_change",
-        "origin_amount_difference",
-        "amount_matches_origin_decrease",
-    ]
-
-    evidence_table = [
-        {"Field": key, "Value": evidence.get(key)}
-        for key in evidence_fields
-        if key in evidence
-    ]
-
-    if evidence_table:
-        st.dataframe(
-            evidence_table,
-            hide_index=True,
-            use_container_width=True,
-        )
-
-    st.subheader("Findings")
-
-    findings = evidence.get("findings", [])
-
-    if findings:
-        for finding in findings:
-            st.write(
-                f"**{finding.get('severity', 'info').upper()} — "
-                f"{finding.get('code', 'FINDING')}**"
+    with st.spinner("Analyzing transaction..."):
+        try:
+            response = requests.post(
+                f"{API_BASE_URL}/investigate",
+                json=payload,
+                timeout=120,
             )
-            st.write(finding.get("finding", ""))
-    else:
-        st.write("No structured findings were returned.")
 
-    st.subheader("Recommended Actions")
+            if response.ok:
+                result = response.json()
+                summary = result.get("case_summary", {})
 
-    for action in result.get("recommended_actions", []):
-        st.markdown(f"- {action}")
+                st.subheader("Investigation result")
 
-    st.warning(result.get("warning", "Review results before taking action."))
+                risk_level = summary.get("risk_level", "Unknown")
+                risk_score = summary.get("risk_score", 0)
 
-    with st.expander("Offline evaluation label"):
-        st.write(
-            "Ground-truth label for testing only; it is not evidence "
-            "available to a real-time investigator."
-        )
-        st.json(result.get("offline_evaluation_only", {}))
-else:
-    st.write(
-        "Enter a transaction ID in the sidebar and select "
-        "**Investigate Transaction** to begin."
-    )
+                col1, col2, col3 = st.columns(3)
+
+                col1.metric("Risk level", risk_level)
+                col2.metric(
+                    "Risk score",
+                    f"{float(risk_score):.1%}",
+                )
+                col3.metric(
+                    "Transaction amount",
+                    f"{float(summary.get('amount', amount)):,.2f}",
+                )
+
+                st.progress(
+                    max(0.0, min(1.0, float(risk_score)))
+                )
+
+                st.subheader("Evidence and findings")
+                evidence = result.get("evidence", [])
+
+                if evidence:
+                    for item in evidence:
+                        with st.expander(
+                            item.get("finding", "Finding")
+                        ):
+                            st.write(item.get("details", "No details"))
+                else:
+                    st.write("No evidence items were returned.")
+
+                st.subheader("Balance analysis")
+                st.write(
+                    result.get(
+                        "balance_note",
+                        "No balance analysis was returned.",
+                    )
+                )
+
+                st.subheader("Recommended actions")
+                for action in result.get("recommended_actions", []):
+                    st.markdown(f"- {action}")
+
+                limitations = result.get("limitations", [])
+                if limitations:
+                    st.subheader("Limitations")
+                    for limitation in limitations:
+                        st.markdown(f"- {limitation}")
+
+                st.warning(
+                    "This model-generated score is not proof of fraud. "
+                    "A qualified human reviewer should assess the evidence."
+                )
+
+            else:
+                st.error(f"API returned {response.status_code}")
+                try:
+                    st.code(response.text)
+                except Exception:
+                    st.write("The API returned an error.")
+
+        except requests.exceptions.Timeout:
+            st.error(
+                "The API took too long to respond. "
+                "Please try again in a moment."
+            )
+        except requests.exceptions.RequestException as error:
+            st.error(f"Could not connect to the API: {error}")
+
+st.divider()
+st.caption(
+    "Backend: FastAPI on Render | "
+    "Model: Random Forest V2 | "
+    "For demonstration and investigation support"
+)
