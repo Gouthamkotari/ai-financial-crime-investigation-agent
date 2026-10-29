@@ -2,7 +2,7 @@
 import requests
 import streamlit as st
 
-API_URL = "http://127.0.0.1:8000"
+API_BASE_URL = "https://financial-crime-api.onrender.com"
 
 st.set_page_config(
     page_title="Financial Crime Investigation Agent",
